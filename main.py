@@ -6,14 +6,15 @@ gestionando automáticamente la sesión Incapsula/Imperva.
 """
 
 import logging
+import re
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from fiscalia_api.connector import IncapsulaSession
+from fiscalia_api import IncapsulaSession, generate_search_pdf
 
 # ── Logging ────────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -96,7 +97,29 @@ async def health():
     }
 
 
-@app.get("/search")
+def _safe_filename(query: str) -> str:
+    """Genera un nombre de archivo seguro a partir del criterio de búsqueda."""
+    cleaned = re.sub(r"[^\w\-_]", "_", query).strip("_")
+    return f"reporte_fiscalia_{cleaned or 'consulta'}.pdf"
+
+
+@app.get(
+    "/search",
+    responses={
+        200: {
+            "content": {
+                "application/json": {},
+                "application/pdf": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary",
+                    }
+                },
+            },
+            "description": "Resultados en formato JSON o documento PDF descargable.",
+        }
+    },
+)
 async def search(
     q: str = Query(
         ...,
@@ -111,16 +134,33 @@ async def search(
             "Mínimo 5 caracteres."
         ),
     ),
+    format: str = Query(
+        "json",
+        pattern="^(json|pdf)$",
+        description="Formato de respuesta deseado: 'json' (por defecto) o 'pdf'.",
+    ),
 ):
     """Busca noticias del delito por cualquier criterio.
 
     Realiza una consulta en el Sistema Integrado de Actuaciones Fiscales
-    (SIAF) de la Fiscalía General del Estado. El buscador acepta
-    cualquier combinación de los criterios listados arriba.
+    (SIAF) de la Fiscalía General del Estado. Retorna los resultados en
+    formato JSON estructurado o como documento PDF descargable.
     """
     try:
         session = await get_session()
         result = await session.search(q)
+
+        if format == "pdf":
+            pdf_bytes = generate_search_pdf(query=q, data=result)
+            filename = _safe_filename(q)
+            return Response(
+                content=pdf_bytes,
+                media_type="application/pdf",
+                headers={
+                    "Content-Disposition": f'inline; filename="{filename}"',
+                },
+            )
+
         return result
 
     except ValueError as e:
@@ -128,6 +168,59 @@ async def search(
 
     except Exception as e:
         logger.exception("Error en búsqueda")
+        raise HTTPException(
+            status_code=502,
+            detail=f"Error al consultar el backend SIAF: {e}",
+        )
+
+
+@app.get(
+    "/search/pdf",
+    response_class=Response,
+    responses={
+        200: {
+            "content": {
+                "application/pdf": {
+                    "schema": {
+                        "type": "string",
+                        "format": "binary",
+                    }
+                }
+            },
+            "description": "Reporte formal en formato PDF generado exitosamente.",
+        }
+    },
+)
+async def search_pdf(
+    q: str = Query(
+        ...,
+        min_length=5,
+        description=(
+            "Criterio de búsqueda (Cédula, RUC, Nombres, NDD, Placa u Oficio). "
+            "Genera y retorna un documento PDF formal."
+        ),
+    ),
+):
+    """Genera un reporte PDF con el resultado de la consulta en la Fiscalía."""
+    try:
+        session = await get_session()
+        result = await session.search(q)
+        pdf_bytes = generate_search_pdf(query=q, data=result)
+        filename = _safe_filename(q)
+
+        return Response(
+            content=pdf_bytes,
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'inline; filename="{filename}"',
+            },
+        )
+
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e))
+
+    except Exception as e:
+        logger.exception("Error generando reporte PDF")
         raise HTTPException(
             status_code=502,
             detail=f"Error al consultar el backend SIAF: {e}",

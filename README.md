@@ -59,6 +59,20 @@ Cuando no hay resultados:
 }
 ```
 
+### `GET /search/pdf?q=<criterio>`
+
+Genera y descarga un reporte formal en formato PDF con la información de las noticias del delito encontradas, incluyendo:
+- Encabezado institucional de la Fiscalía General del Estado
+- Resumen del criterio consultado y fecha de emisión
+- Ficha de detalles del incidente (delito, lugar, fecha, unidad, etc.)
+- Tablas de sujetos procesados/denunciantes y vehículos relacionados
+- Numeración dinámica de páginas ("Página X de Y")
+
+También puedes solicitar PDF directamente en el endpoint general agregando `&format=pdf`:
+```bash
+curl "http://localhost:8000/search?q=1712345678&format=pdf" -o reporte.pdf
+```
+
 ### `GET /health`
 
 Estado del servicio:
@@ -99,7 +113,8 @@ api_consulta_fiscalia/
 └── fiscalia_api/
     ├── __init__.py
     ├── serializer.py          # Serialización PHP compatible con el backend
-    └── connector.py           # Cliente HTTP + gestión de sesión Incapsula
+    ├── connector.py           # Cliente HTTP + gestión de sesión Incapsula
+    └── pdf.py                 # Generador de reportes PDF (ReportLab)
 ```
 
 ## Cómo funciona
@@ -115,12 +130,14 @@ api_consulta_fiscalia/
 4. La búsqueda se envía serializada en **formato PHP `serialize()`**:
    `a:2:{i:0;s:5:"PEREZ";i:1;s:5:"GOMEZ";}`
 5. La respuesta HTML se parsea a JSON estructurado con BeautifulSoup
+6. Para exportar a PDF, los resultados se maquetan en un reporte institucional con ReportLab
 
 ## Stack
 
 - **FastAPI** + uvicorn
 - **httpx** — cliente HTTP async con persistencia de cookies
 - **BeautifulSoup** + lxml — parser HTML
+- **ReportLab** — generación de documentos PDF
 - **Python 3.13**
 
 ## Notas
